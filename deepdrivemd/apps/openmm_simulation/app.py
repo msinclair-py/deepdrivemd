@@ -1,4 +1,5 @@
 import random
+import parmed as pmd
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
@@ -70,6 +71,7 @@ def _configure_amber_implicit(
 
 def _configure_amber_explicit(
     top_file: PathLike,
+    pdb_file: PathLike,
     dt_ps: float,
     temperature_kelvin: float,
     heat_bath_friction_coef: float,
@@ -77,11 +79,18 @@ def _configure_amber_explicit(
     platform_properties: Dict[str, str],
     explicit_barostat: str,
 ) -> "app.Simulation":
+    #top = pmd.load_file(str(top_file), xyz=str(pdb_file))
+    if dt_ps > 0.002:
+        hmr = 1.5 * u.amu
+    else:
+        hmr = 1 * u.amu
+
     top = app.AmberPrmtopFile(str(top_file))
     system = top.createSystem(
         nonbondedMethod=app.PME,
         nonbondedCutoff=1.0 * u.nanometer,
         constraints=app.HBonds,
+        hydrogenMass=hmr,
     )
 
     # Congfigure integrator
@@ -190,6 +199,7 @@ def configure_simulation(
         pdb = None
         sim = _configure_amber_explicit(
             top_file,
+            pdb_file,
             dt_ps,
             temperature_kelvin,
             heat_bath_friction_coef,
@@ -333,14 +343,26 @@ class MDSimulationApplication(Application):
 
         # Compute contact maps, rmsd, etc in bulk
         mda_u = MDAnalysis.Universe(str(pdb_file), str(traj_file))
-        ref_u = MDAnalysis.Universe(str(self.config.rmsd_reference_pdb))
-        # Align trajectory to compute accurate RMSD
-        align.AlignTraj(
-            mda_u, ref_u, select=self.config.mda_selection, in_memory=True
-        ).run()
-        # Get atomic coordinates of reference atoms
-        ref_positions = ref_u.select_atoms(self.config.mda_selection).positions.copy()
-        atoms = mda_u.select_atoms(self.config.mda_selection)
+        # if this path is a list we are switching from RMSD to distance analysis
+        if self.config.rmsd_reference_pdb is None:
+            ref_u = MDAnalysis.Universe(str(pdb_file))
+            d1 = mda_u.select_atoms(self.config.distance_sels[0])
+            d2 = mda_u.select_atoms(self.config.distance_sels[1])
+        else:
+            ref_u = MDAnalysis.Universe(str(self.config.rmsd_reference_pdb))
+            # Align trajectory to compute accurate RMSD
+            align.AlignTraj(
+                mda_u, ref_u, select=self.config.mda_selection, in_memory=True
+            ).run()
+            # Get atomic coordinates of reference atoms
+            ref_positions = ref_u.select_atoms(self.config.mda_selection).positions.copy()
+        if self.config.mda_selection_resid_list is not None:
+            resids = open(self.config.mda_selection_resid_list).readline()
+            selection = f'{self.config.mda_selection} and resid {resids}'
+        else:
+            selection = self.config.mda_selection
+
+        atoms = mda_u.select_atoms(selection)
         box = mda_u.atoms.dimensions
         rows, cols, rmsds = [], [], []
         for _ in mda_u.trajectory:
@@ -354,7 +376,11 @@ class MDSimulationApplication(Application):
             cols.append(coo.col.astype("int16"))
 
             # Compute RMSD
-            rmsd = rms.rmsd(positions, ref_positions, center=True, superposition=True)
+            # highjacking the rmsd object for distance-based analysis
+            if self.config.rmsd_reference_pdb is None:
+                rmsd = distances.dist(d1, d2, box=box)[2][0]
+            else:
+                rmsd = rms.rmsd(positions, ref_positions, center=True, superposition=True)
             rmsds.append(rmsd)
 
         # Save simulation analysis results

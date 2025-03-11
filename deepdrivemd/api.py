@@ -16,7 +16,7 @@ import yaml
 from colmena.models import Result
 from colmena.queue import ColmenaQueues
 from colmena.thinker import BaseThinker, agent, event_responder, result_processor
-from pydantic import BaseSettings as _BaseSettings
+from pydantic import BaseModel as _BaseSettings
 from pydantic import root_validator, validator
 
 _T = TypeVar("_T")

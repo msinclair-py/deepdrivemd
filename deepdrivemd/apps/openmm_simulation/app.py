@@ -122,6 +122,28 @@ def _configure_amber_explicit(
 
 # TODO: Instead of the procedural abstraction, a strategy
 # simulation object would be more modular and extensible.
+def equilibrate(sim: "app.Simulation",
+                integrator: "app.Integrator"):
+    simulation.context.setVelocitiesToTemperature(5*kelvin)
+    T = 5
+
+    integrator.setTemperature(T * kelvin)
+    mdsteps = 100000
+    length = mdsteps // 1000
+    tstep = (300 - T) / length
+
+    for i in range(length):
+        simulation.step(mdsteps//60)
+        temp = T + tstep * (1 + i)
+
+        if temp > 300:
+            temp = 300
+
+        integrator.setTemperature(temp * kelvin)
+    
+    simulation.step(mdsteps)
+
+    return simulation, integrator
 
 
 def configure_simulation(
